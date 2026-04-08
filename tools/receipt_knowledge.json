@@ -1,0 +1,27 @@
+{
+  "25": {
+    "hints": "Taiwan's standard e-invoice (電子發票格式 25). CRITICAL DATE WARNING: '115年03-04月' is the BIMONTHLY INVOICE PERIOD (e.g. March–April), NOT the transaction date — do NOT read this as 03/04. The real transaction date is in the timestamp line just below the invoice number (e.g. '2026-03-12 16:00:50') — use the date portion of that timestamp (MM/DD/YYYY). CERTIFICATE BLOCK LAYOUT: The header block below the invoice number is a 3-row × 2-column grid: (1,1)=date/timestamp, (1,2)=格式:25, (2,1)=隨機碼:XXXX, (2,2)=總計:XXXX, (3,1)=買方, (3,2)=賣方. The total you want is ALWAYS cell (2,2) — the RIGHT column of the SECOND row, labeled '總計'. '格式 25' at (1,2) is a format code — 25 is NEVER the total. '隨機碼' at (2,1) is a lottery verification code — its value is NEVER the total, even though it sits directly to the LEFT of '總計'. '買方' and '賣方' are tax IDs — NEVER the total. Louisa Coffee receipts have many $0 loyalty-point line items — ignore those; the real total is 總計.",
+    "total_label": "總計",
+    "date_format": "Use the YYYY-MM-DD timestamp below the invoice number, NOT the 年MM-DD月 bimonthly period header"
+  },
+  "JRP": {
+    "hints": "JRP 正好停 parking lot e-invoice (電子發票證明聯). The total is labeled '總計' and appears on the UPPER section of the receipt on the same line as '隨機碼' (e.g. '隨機碼：0345　總計 700'). Ignore the QR codes, barcode, and 隨機碼 value. The date is on the same line just above 隨機碼 in format YYYY-MM-DD HH:MM:SS — use the date portion only. The 交易明細 section below the dashed line also shows '金額' and '總計金額' which should match — use either to confirm. Ignore 車號 (license plate) and 停車分鐘 (parking minutes).",
+    "total_label": "總計",
+    "date_format": "YYYY-MM-DD (from the timestamp line, e.g. 2026-02-01)"
+  },
+  "免用統一發票收據": {
+    "hints": "Handwritten Taiwan receipt exempt from uniform invoice (免用統一發票收據). This receipt type is MOST PRONE TO ERRORS — handwriting can be ambiguous. The total appears in TWO places and you MUST cross-reference both before accepting a value: (1) a numeric amount in the '總價' column of the last filled line item row, and (2) a written-out Chinese amount in the '合計新台幣' row at the bottom (e.g. 七百元 = 700). Only accept the total if BOTH representations agree. If they conflict or either is unclear, leave Total Amount as empty string. Common misreads: 7 vs 1, 8 vs 3, 百 (hundred) vs 千 (thousand). The date is handwritten in the top-right corner in format 中華民國 YYY年 M月 D日 — convert to Gregorian by adding 1911 to the year (e.g. 115年 = 2026). Ignore the blue merchant stamp (統一編號, TEL, address) — those are not amounts.",
+    "total_label": "合計新台幣 / 總價",
+    "date_format": "中華民國 YYY年M月D日 (top-right, handwritten; add 1911 to year for Gregorian)"
+  },
+  "計程車": {
+    "hints": "Taiwan taxi ride certificate (計程車乘車證明). The total is labeled '車資(Total, $)' in large bold text (e.g. 車資(Total,$):475). The '跳表金額(Fare, $)' below should match — use it to confirm. Use the '上車(Start)' date as the receipt date. Ignore 序號, 車號(Plate), phone numbers, meter brand/serial number, and 停等時間.",
+    "total_label": "車資(Total, $)",
+    "date_format": "YYYY/MM/DD (from 上車(Start) field, e.g. 2026/02/07)"
+  },
+  "Taiwan Water Corporation": {
+    "hints": "Taiwan Water Corporation (台灣自來水公司) payment receipt. The grand total is labeled '合計' near the bottom right (e.g. 合計: 588). Ignore sub-totals: '水費項目小計' (water fee subtotal) and '代徵費用小計' (collected fee subtotal) — these are components, not the final amount. The payment date is in the official red stamp (台灣自來水公司收費章) at the bottom right in format 115/MM/DD (Taiwanese Republic calendar).",
+    "total_label": "合計",
+    "date_format": "YYY/MM/DD (Taiwanese Republic calendar, e.g. 115/03/03)"
+  }
+}

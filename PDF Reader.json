@@ -1,0 +1,680 @@
+{
+  "name": "PDF Reader",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        224,
+        304
+      ],
+      "id": "a3bfacd2-cf10-4260-ba24-c08f2f056cd4",
+      "name": "Download file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "qOYF5OfLGiJ2GkKI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        112
+      ],
+      "id": "6abfec83-ea4e-4ebe-b249-f9d74158c63d",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.text }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "Date",
+              "description": "Extract the receipt date EXACTLY as shown.",
+              "required": true
+            },
+            {
+              "name": "Total Amount",
+              "description": "What is the total amount \"number\" listed",
+              "required": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        0
+      ],
+      "id": "70e73a39-0cbe-4ad6-af19-c8333c485807",
+      "name": "Information Extractor"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        976,
+        224
+      ],
+      "id": "4013ac96-c738-4b06-99b2-e206de7b505a",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "YZI6u12zDpTqF8Lf",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wOfFaztWv7J5XcHGLqmPst_xntnxPp33wUYIVWofF_4",
+          "mode": "list",
+          "cachedResultName": "Fubon Braves Reimbursements",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wOfFaztWv7J5XcHGLqmPst_xntnxPp33wUYIVWofF_4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Reimbursement Tracker",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wOfFaztWv7J5XcHGLqmPst_xntnxPp33wUYIVWofF_4/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $('On form submission1').item.json.Name }}",
+            "Date": "={{ $json.output.Date }}",
+            "Cost (NTD)": "={{ $json.output['Total Amount'] }}",
+            "PDF/Screenshot": "={{ $('Download file').item.json.webViewLink }}",
+            "Reimbursed Item": "={{ $('On form submission1').item.json['Reimbursed Item'] }}",
+            "Notes": "={{ $('On form submission1').item.json['Notes'] }}"
+          },
+          "matchingColumns": [
+            "Name"
+          ],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reimbursed Item",
+              "displayName": "Reimbursed Item",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Cost (NTD)",
+              "displayName": "Cost (NTD)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "PDF/Screenshot",
+              "displayName": "PDF/Screenshot",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1248,
+        304
+      ],
+      "id": "7f9bd95a-ad2f-46be-a819-e309c65fc2aa",
+      "name": "Update reimbursement tracker",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "z05WQKT7G2VmCYTN",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "GPT-5.2"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Name:  {{ $json.Name }}\n\nDate: {{ $json.Date }}\n\nReimbursed item: {{ $json['Reimbursed Item'] }}\n\nCost: {{ $json['Cost (NTD)'] }}\n\nNotes: {{ $('On form submission1').item.json['Notes'] }}\n\nDigital Copy: {{ $json['PDF/Screenshot'] }}"
+            },
+            {
+              "role": "system",
+              "content": "# Overview\nYou are an email expert for the Fubon Braves named Bobby. You will receive invoice information. Your job is to notify the internal billing team that an invoice was received/sent. Refer to yourself as we. For the cost amount, make sure it's in NTD. And if there are notes, please notify them as well.\n\n# Email\nInform the billing team of the invoice. Let them know we have also updated this in the invoice database, and they can view it here:\nhttps://docs.google.com/spreadsheets/d/1wOfFaztWv7J5XcHGLqmPst_xntnxPp33wUYIVWofF_4/edit?gid=0#gid=0\n\n# Output\nOutput the email content only. No subject\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1472,
+        304
+      ],
+      "id": "39b0dcd6-9d00-477e-a961-322b4cad9188",
+      "name": "Create Email",
+      "credentials": {
+        "openAiApi": {
+          "id": "YZI6u12zDpTqF8Lf",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "spencerlinbb@gmail.com",
+        "subject": "={{ $('On form submission1').item.json.Name }} - {{ $('Update reimbursement tracker').item.json['Reimbursed Item'] }} on {{ $('Update reimbursement tracker').item.json.Date }}",
+        "emailType": "text",
+        "message": "={{ $json.output[0].content[0].text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1824,
+        304
+      ],
+      "id": "e2f1de66-9129-47d8-aed2-b190b2879877",
+      "name": "Send a message",
+      "webhookId": "81bdf97d-54b0-465e-a2c4-efc63779790c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "UQR72HXwAnbkRb2M",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "formTitle": "Fubon Braves Reimbursement Request",
+        "formDescription": "Reimbursement Request from players and staff",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Name",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Spencer"
+                  },
+                  {
+                    "option": "Aven"
+                  },
+                  {
+                    "option": "Wang"
+                  },
+                  {
+                    "option": "Lion"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Reimbursed Item",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Uber/Taxi from NTUA"
+                  },
+                  {
+                    "option": "Uber/Taxi to NTUA"
+                  },
+                  {
+                    "option": "Uber (Away Game)"
+                  },
+                  {
+                    "option": "Meal"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Are you submitting a PDF or Screenshot",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "PDF"
+                  },
+                  {
+                    "option": "Screenshot"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Receipt",
+              "fieldType": "file"
+            },
+            {
+              "fieldLabel": "Notes"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -224,
+        304
+      ],
+      "id": "1f46b237-2936-4c1e-bca2-ba511c6e5563",
+      "name": "On form submission1",
+      "webhookId": "0e41aac1-f5e7-4c42-bcab-746e96cba9e7"
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "Receipt",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1v1ouyAOezC1JLuvHt-WWEaGbRa7dONDs",
+          "mode": "list",
+          "cachedResultName": "Fubon Braves Receipts",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1v1ouyAOezC1JLuvHt-WWEaGbRa7dONDs"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        0,
+        304
+      ],
+      "id": "8acd3626-a801-476f-90ea-d3a718edbbba",
+      "name": "Upload file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "qOYF5OfLGiJ2GkKI",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "text": "Extract the date on the receipt and the total amount please",
+        "inputType": "binary",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        512
+      ],
+      "id": "7b2c671b-f4d9-47d5-b94c-b49e7c8cf8ea",
+      "name": "Analyze document",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "gQ4stRjbttrNS0PI",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        976,
+        736
+      ],
+      "id": "0feb8f66-302b-4188-939b-a83ee38da458",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "YZI6u12zDpTqF8Lf",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.content.parts[0].text }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "Date",
+              "description": "Extract the receipt date EXACTLY as shown.",
+              "required": true
+            },
+            {
+              "name": "Total Amount",
+              "description": "What is the total amount listed",
+              "required": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        512
+      ],
+      "id": "fc8c3ac4-fbc0-45bb-a7dc-28dcc65a43f8",
+      "name": "Information Extractor1"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3e09e4b1-6bba-4851-adf9-7cd9508ae17d",
+                    "leftValue": "={{ $('On form submission1').item.json['Are you submitting a PDF or Screenshot'] }}",
+                    "rightValue": "PDF",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "030b0dcf-193e-4c35-aaae-9049b5da0e59",
+                    "leftValue": "={{ $('On form submission1').item.json['Are you submitting a PDF or Screenshot'] }}",
+                    "rightValue": "Screenshot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        304
+      ],
+      "id": "ea13d112-3aa0-4977-bcda-9ab5b769ffe1",
+      "name": "Switch1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Download file": {
+      "main": [
+        [
+          {
+            "node": "Switch1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor": {
+      "main": [
+        [
+          {
+            "node": "Update reimbursement tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update reimbursement tracker": {
+      "main": [
+        [
+          {
+            "node": "Create Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Email": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission1": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload file": {
+      "main": [
+        [
+          {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch1": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor1": {
+      "main": [
+        [
+          {
+            "node": "Update reimbursement tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ade45a44-a906-4e19-af56-8b4dde209066",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a9ec84bc18d28001c2842ff8745c8c44483a38880ae9e5ba468a0e58a82c093b"
+  },
+  "id": "62phYCA5LXcFYlR9",
+  "tags": []
+}
