@@ -3,16 +3,14 @@ extract_receipt.py
 ------------------
 Extracts date and total amount from a receipt.
 - PDF: extract text with PyPDF2, then GPT-4o mini parses it
-- Image (screenshot): Gemini 2.5 Flash transcribes raw text (OCR), then GPT-4o mini structures it
-  Two-step to separate OCR (image → text) from extraction (text → JSON), improving digit accuracy.
-  Gemini is used for OCR because it is significantly more accurate on dense Chinese receipt text.
-  GPT-4o mini is used for structuring because it only sees clean text — no image hallucination risk.
+- Image (screenshot): Gemini 2.5 Flash reads the image and returns structured JSON directly (single pass)
 """
 
-import base64
 import json
 import os
+import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from google import genai
@@ -27,8 +25,8 @@ from openai import OpenAI
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 
-GPT4O_MINI_INPUT_COST  = 0.15 / 1_000_000   # $ per input token
-GPT4O_MINI_OUTPUT_COST = 0.60 / 1_000_000   # $ per output token
+GPT4O_MINI_INPUT_COST  = 0.15  / 1_000_000  # $ per input token
+GPT4O_MINI_OUTPUT_COST = 0.60  / 1_000_000  # $ per output token
 GEMINI_INPUT_COST      = 0.075 / 1_000_000  # $ per input token
 GEMINI_OUTPUT_COST     = 0.30  / 1_000_000  # $ per output token
 
@@ -36,14 +34,12 @@ KNOWLEDGE_FILE = Path(__file__).parent / "receipt_knowledge.json"
 
 
 def _load_knowledge() -> dict:
-    """Load merchant knowledge base from disk."""
     if KNOWLEDGE_FILE.exists():
         return json.loads(KNOWLEDGE_FILE.read_text(encoding="utf-8"))
     return {}
 
 
 def _build_knowledge_hints() -> str:
-    """Load all knowledge base entries and format them as a hints block for the prompt."""
     knowledge = _load_knowledge()
     if not knowledge:
         return ""
@@ -93,167 +89,158 @@ def extract_from_pdf(file_path: str) -> tuple[dict, float]:
     return _extract_fields_with_gpt(client, text)
 
 
-def _load_image_data(file_path: str) -> tuple[bytes, str]:
-    """Load image file and return (image_bytes, mime_type). Converts HEIC to JPEG."""
+def _load_image_data(file_path: str, crop_top_fraction: float = 1.0) -> tuple[bytes, str]:
+    """Load image file and return (image_bytes, mime_type). Converts HEIC to JPEG.
+    crop_top_fraction: if < 1.0, crop to only the top portion of the image."""
+    from PIL import Image
+    import io
     ext = Path(file_path).suffix.lower()
-    if ext == ".heic":
-        from PIL import Image
-        import io
-        img = Image.open(file_path)
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG")
-        return buf.getvalue(), "image/jpeg"
-    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
-    with open(file_path, "rb") as f:
-        return f.read(), mime_map.get(ext, "image/jpeg")
+    img = Image.open(file_path).convert("RGB")
+    if crop_top_fraction < 1.0:
+        w, h = img.size
+        img = img.crop((0, 0, w, int(h * crop_top_fraction)))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return buf.getvalue(), "image/jpeg"
 
 
-def _gemini_ocr(image_data: bytes, mime_type: str, ocr_prompt: str) -> tuple[str, float]:
-    """Send image to Gemini 2.5 Flash for raw text transcription. Returns (raw_text, cost_usd).
-    Retries up to 3 times with exponential backoff on 503 UNAVAILABLE errors."""
+def _gemini_call(image_data: bytes, mime_type: str, prompt: str, response_mime_type: str = "text/plain") -> tuple[str, float]:
+    """Send image + prompt to Gemini 2.5 Flash. Returns (response_text, cost_usd)."""
     import time
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         print("ERROR: GEMINI_API_KEY not set in .env", file=sys.stderr)
         sys.exit(1)
     client = genai.Client(api_key=gemini_api_key)
-    for attempt in range(4):
+    for attempt in range(3):
         try:
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=[types.Part.from_bytes(data=image_data, mime_type=mime_type), ocr_prompt],
+                contents=[types.Part.from_bytes(data=image_data, mime_type=mime_type), prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type=response_mime_type,
+                    http_options=types.HttpOptions(timeout=90000),
+                ),
             )
             usage = response.usage_metadata
             cost = usage.prompt_token_count * GEMINI_INPUT_COST + usage.candidates_token_count * GEMINI_OUTPUT_COST
-            print(f"  Gemini 2.5 Flash (OCR):    {usage.prompt_token_count} in + {usage.candidates_token_count} out → ${cost:.4f}")
+            print(f"  Gemini 2.5 Flash:          {usage.prompt_token_count} in + {usage.candidates_token_count} out → ${cost:.4f}")
             return response.text, cost
         except Exception as e:
-            if attempt < 3 and "503" in str(e):
-                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
-                print(f"  Gemini 503 (attempt {attempt + 1}/4) — retrying in {wait}s...")
+            if attempt < 2:
+                wait = 3 * (attempt + 1)
+                print(f"  Gemini error (attempt {attempt + 1}/3): {e} — retrying in {wait}s...")
                 time.sleep(wait)
             else:
                 raise
 
 
 def extract_from_image(file_path: str) -> tuple[dict, float]:
-    """Step 1: Gemini transcribes raw text. Step 2: GPT-4o mini structures it. Returns (result, cost_usd)."""
+    """Single pass: Gemini 2.5 Flash reads the image and extracts date + total directly."""
     image_data, mime_type = _load_image_data(file_path)
-    total_cost = 0.0
 
-    # Step 1: Gemini reads the image and transcribes every character — no schema pressure
-    ocr_prompt = (
-        "Transcribe every piece of text you can see on this receipt exactly as printed. "
-        "Include all labels and their associated numbers on the same line, preserving layout. "
-        "Do not summarize, interpret, or skip any text. Output plain text only."
+    prompt = (
+        "Look at this receipt image and extract the date and total amount. Return ONLY valid JSON:\n"
+        '{"Date": "MM/DD/YYYY or empty string if not found", "Total Amount": "number only (no currency symbols), or empty string if not found"}\n\n'
+        "RULES:\n"
+        "- For the total: find '總計' or '合計' and use the number immediately next to or below that label.\n"
+        "- '格式' is a format code (small number like 25) — NEVER use it as the total.\n"
+        "- NEVER use numbers after: '格式', '隨機碼', '機碼', '統一編號', '貴方', '買方'.\n"
+        "- If neither '總計' nor '合計' is present, look for English 'Total'.\n"
+        "- For the date: use the transaction timestamp (e.g. 2026-03-12 16:00:50), not the bimonthly period (e.g. 115年03-04月).\n"
+        "- If the total cannot be clearly identified, return empty string."
     )
-    raw_text, cost = _gemini_ocr(image_data, mime_type, ocr_prompt)
-    total_cost += cost
 
-    # Step 2: GPT-4o mini extracts structured fields from plain text — no image involved
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    extract_prompt = (
-        f"Extract the date and total amount from this receipt text. Return ONLY valid JSON:\n"
-        f'{{"Date": "MM/DD/YYYY or empty string if not found", "Total Amount": "number only (no currency symbols), or empty string if not found"}}\n\n'
-        f"For the total: look ONLY for '總計' or '合計' — use ONLY the number on the same line immediately after that label. "
-        f"NEVER use numbers following: '格式', '隨機碼', '機碼', '統一編號', '貴方', '買方'. "
-        f"If neither 總計 nor 合計 is present, check for 'Total' in English. "
-        f"If the total cannot be clearly identified, return empty string.\n\n"
-        f"For the date: use the transaction timestamp (e.g. 2026-03-12 16:00:50), not the bimonthly period (e.g. 115年03-04月).\n\n"
-        f"Receipt text:\n{raw_text[:3000]}"
-    )
-    extract_response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": extract_prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    usage = extract_response.usage
-    cost = usage.prompt_tokens * GPT4O_MINI_INPUT_COST + usage.completion_tokens * GPT4O_MINI_OUTPUT_COST
-    total_cost += cost
-    print(f"  GPT-4o mini (struct):      {usage.prompt_tokens} in + {usage.completion_tokens} out → ${cost:.4f}")
-    return json.loads(extract_response.choices[0].message.content), total_cost
+    raw, cost = _gemini_call(image_data, mime_type, prompt, response_mime_type="application/json")
+    return json.loads(raw), cost
 
 
 CATEGORIES = [
-    "Uber/Taxi from NTUA",
-    "Uber/Taxi to NTUA",
-    "Uber (Away Game)",
+    "Uber/Taxi",
     "Meal",
     "Other",
 ]
 
 
+def _identify_invoices(image_data: bytes, mime_type: str, receipt_count: int) -> tuple[list[str], float]:
+    """Pass 1: identify all invoice numbers left to right."""
+    prompt = (
+        f"This image contains {receipt_count} receipts laid side by side. "
+        f"Each receipt has an invoice number printed in large text near the top (e.g. XJ-07462440, WK-51343615, WC-27543875). "
+        f"List all {receipt_count} invoice numbers from left to right. "
+        f"Ignore delivery slips (e.g. foodpanda). "
+        f'Return ONLY valid JSON: {{"invoices": ["INVOICE1", "INVOICE2", ...]}}'
+    )
+    raw, cost = _gemini_call(image_data, mime_type, prompt, response_mime_type="application/json")
+    result = json.loads(raw)
+    return result.get("invoices", []), cost
+
+
+def _extract_single_invoice(image_data: bytes, mime_type: str, invoice: str, category_list: str, knowledge_hints: str) -> tuple[dict, float]:
+    """Pass 2: extract date, total, and category for one specific invoice number."""
+    prompt = (
+        f"In this image, find the receipt with invoice number {invoice}.\n"
+        f"Below the invoice number is a 3×2 grid:\n"
+        f"  [ timestamp ]  [ 格式: XX  ]\n"
+        f"  [ 隨機碼   ]  [ 總計: XXX ]\n"
+        f"  [ 賣方     ]  [ 買方      ]\n\n"
+        f"Extract ONLY from the receipt with invoice number {invoice} — ignore all other receipts.\n\n"
+        f"DATE: the timestamp in the top-left cell (e.g. 2026-01-24 17:05:08) — NOT the 115年MM-DD月 period.\n"
+        f"TOTAL: the number next to '總計' in the middle-right cell. "
+        f"CRITICAL — READING THE TOTAL: After locating '總計', scan the ENTIRE cell from LEFT to RIGHT. "
+        f"Totals in Taiwan are typically 3–5 digits. Start reading from the LEFTMOST digit — do NOT skip any digit. "
+        f"Commas are thousands separators: '5,729' = 5729 (NOT 729). '1,234' = 1234. '12,345' = 12345. "
+        f"The digit before the comma is part of the number — never drop it. "
+        f"Currency symbols like '$' or 'NT$' are NOT digits — strip them: '$525' = 525 (NOT 5525). "
+        f"NEVER use the number next to '格式' (always ~25). "
+        f"{knowledge_hints}\n\n"
+        f"CATEGORY: choose one from: {category_list}\n\n"
+        f'Return ONLY valid JSON: {{"Invoice": "{invoice}", "Date": "MM/DD/YYYY or empty", "Total Amount": "digits only or empty", "Category": "category"}}'
+    )
+    raw, cost = _gemini_call(image_data, mime_type, prompt, response_mime_type="application/json")
+    result = json.loads(raw)
+    return result, cost
+
+
 def extract_multiple_from_image(file_path: str, receipt_count: int) -> tuple[list[dict], float, list[str]]:
     """
-    Step 1: Gemini transcribes all receipts as raw text.
-    Step 2: GPT-4o mini extracts structured fields from that text.
+    Two-pass parallelized extraction:
+      Pass 1: identify all invoice numbers (1 call)
+      Pass 2: extract date/total/category per invoice in parallel (N calls)
     Returns (list of {"Date", "Total Amount", "Category"}, cost_usd, flagged_indices)
     """
-    image_data, mime_type = _load_image_data(file_path)
+    image_data, mime_type = _load_image_data(file_path, crop_top_fraction=0.40)
     knowledge_hints = _build_knowledge_hints()
     category_list = ", ".join(CATEGORIES)
     total_cost = 0.0
 
-    # Step 1: Gemini transcribes all visible text — pure OCR, no schema pressure
-    ocr_prompt = (
-        f"This image contains {receipt_count} receipts glued onto a piece of paper. "
-        f"Transcribe every piece of text you can see on each receipt, left to right. "
-        f"For each receipt, label it 'Receipt N:' and transcribe all text exactly as printed, "
-        f"preserving labels and their associated numbers on the same line. "
-        f"Include merchant name, invoice number, all header fields, all line items, and totals. "
-        f"Do not summarize, interpret, or skip any text. Output plain text only."
-    )
-    raw_text, cost = _gemini_ocr(image_data, mime_type, ocr_prompt)
-    total_cost += cost
-    print(f"  --- RAW OCR ---\n{raw_text}\n  --- END OCR ---")
+    # Pass 1: get invoice numbers
+    print("  Pass 1: identifying invoice numbers...")
+    invoices, cost1 = _identify_invoices(image_data, mime_type, receipt_count)
+    total_cost += cost1
+    print(f"  Found: {invoices}")
 
-    # Step 2: GPT-4o mini extracts structured fields from plain text — no image involved
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    extract_prompt = (
-        f"Below is transcribed text from {receipt_count} receipts. Extract date, total amount, and category for each.\n\n"
+    # Pass 2: parallel targeted extraction per invoice
+    print("  Pass 2: extracting each receipt in parallel...")
+    results_by_invoice = {}
+    with ThreadPoolExecutor(max_workers=receipt_count) as executor:
+        futures = {
+            executor.submit(_extract_single_invoice, image_data, mime_type, inv, category_list, knowledge_hints): inv
+            for inv in invoices
+        }
+        for future in as_completed(futures):
+            inv = futures[future]
+            result, cost = future.result()
+            total_cost += cost
+            results_by_invoice[inv] = result
 
-        f"NON-RECEIPT ITEMS: Ignore any delivery slips or order confirmations in the text "
-        f"(e.g. a foodpanda slip with an order number like '#3814'). Never use an order number as a total.\n\n"
+    # Preserve left-to-right order from Pass 1
+    receipts = [results_by_invoice[inv] for inv in invoices if inv in results_by_invoice]
 
-        f"IDENTICAL-STORE RECEIPTS: If two receipts are from the same store, each has a unique invoice number "
-        f"(e.g. WK-51343615 vs WK-51344518). Match the total only to the receipt with that invoice number.\n\n"
-
-        f"{knowledge_hints}\n\n"
-
-        f"FINDING THE TOTAL:\n"
-        f"1. The total is the number on the same line immediately after the label '總計' or '合計'.\n"
-        f"2. NEVER use the number after '隨機碼', '機碼', '格式', '統一編號', '貴方', or '買方'.\n"
-        f"3. If you cannot find '總計' or '合計', check for English 'Total'.\n"
-        f"4. If the total is ambiguous, leave it as empty string.\n\n"
-
-        f"HANDWRITTEN RECEIPTS (免用統一發票收據): Cross-reference 總價 column number with 合計新台幣 Chinese text "
-        f"(e.g. 七百元 = 700). Both must agree — if not, leave Total Amount as empty string.\n\n"
-
-        f"Categories: {category_list}\n\n"
-        f"Return ONLY a valid JSON array with exactly {receipt_count} objects:\n"
-        f'[{{"Date": "MM/DD/YYYY or empty string", "Total Amount": "number only or empty string", "Category": "one of the categories above"}}, ...]\n\n'
-        f"Transcribed receipt text:\n{raw_text}"
-    )
-    extract_response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": extract_prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    usage = extract_response.usage
-    cost = usage.prompt_tokens * GPT4O_MINI_INPUT_COST + usage.completion_tokens * GPT4O_MINI_OUTPUT_COST
-    total_cost += cost
-    print(f"  GPT-4o mini (struct):      {usage.prompt_tokens} in + {usage.completion_tokens} out → ${cost:.4f}")
-
-    result = json.loads(extract_response.choices[0].message.content)
-    # The model may return {"receipts": [...]} or directly a list
-    receipts = result if isinstance(result, list) else next(iter(result.values()))
     for i, r in enumerate(receipts):
-        print(f"  Receipt {i+1}: {r.get('Date')} | {r.get('Total Amount')} NTD | {r.get('Category')}")
+        print(f"  Receipt {i+1} [{r.get('Invoice', '?')}]: {r.get('Date')} | {r.get('Total Amount')} NTD | {r.get('Category')}")
 
     flagged = [f"Receipt {i+1}" for i, r in enumerate(receipts) if not r.get("Date") or not r.get("Total Amount")]
-
     return receipts, total_cost, flagged
 
 
