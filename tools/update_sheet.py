@@ -3,13 +3,14 @@ update_sheet.py
 ---------------
 Appends reimbursement rows to the Fubon 單據明細表 Google Sheet.
 
-Columns (A–F):
+Columns (A–G):
   A: 日期          — receipt date
   B: 憑證編號      — global auto-incrementing voucher number
   C: 費用類別      — always 交通費
   D: 摘要          — notes (+ drive link appended)
   E: 憑證總額      — receipt total amount
   F: 名字          — person name
+  G: 輸入日期      — date the entry was submitted
 
 Rows are grouped by person in a fixed order. New rows are inserted
 at the end of the person's existing block, not just the sheet bottom.
@@ -63,7 +64,7 @@ def _read_sheet_data(service, sheet_id: str) -> list[dict]:
     """
     result = service.spreadsheets().values().get(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{DATA_START_ROW}:F1000",
+        range=f"{SHEET_NAME}!A{DATA_START_ROW}:G1000",
     ).execute()
     rows = result.get("values", [])
     data = []
@@ -153,9 +154,9 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
 
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{totals_row}:E{totals_row}",
+        range=f"{SHEET_NAME}!A{totals_row}:G{totals_row}",
         valueInputOption="USER_ENTERED",
-        body={"values": [["合計", "", "", "", f"=SUM(E{DATA_START_ROW}:E{last_data_row})"]]},
+        body={"values": [["合計", "", "", "", f"=SUM(E{DATA_START_ROW}:E{last_data_row})", "", ""]]},
     ).execute()
 
     row_idx = totals_row - 1  # 0-indexed for batchUpdate
@@ -171,12 +172,12 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
                 },
                 "mergeType": "MERGE_ALL",
             }},
-            # Format entire totals row
+            # Format entire totals row (A–G)
             {"repeatCell": {
                 "range": {
                     "sheetId": sheet_gid,
                     "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
-                    "startColumnIndex": 0, "endColumnIndex": 5,
+                    "startColumnIndex": 0, "endColumnIndex": 7,
                 },
                 "cell": {"userEnteredFormat": {
                     "backgroundColor": AMBER,
@@ -204,14 +205,15 @@ def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: 
     insert_row = _find_insert_row(sheet_data, name)
     voucher = _global_voucher(sheet_data)
 
+    entry_date = datetime.now().strftime("%Y/%m/%d")
     摘要 = f"{notes}  {drive_link}".strip() if drive_link else notes
-    row = [date, voucher, "交通費", 摘要, _parse_amount(amount), name]
+    row = [date, voucher, "交通費", 摘要, _parse_amount(amount), name, entry_date]
 
     _insert_rows(service, sheet_id, sheet_gid, insert_row, 1)
 
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{insert_row}:F{insert_row}",
+        range=f"{SHEET_NAME}!A{insert_row}:G{insert_row}",
         valueInputOption="RAW",
         body={"values": [row]},
     ).execute()
@@ -240,6 +242,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     start_voucher = _global_voucher(sheet_data)
     n = len(rows)
 
+    entry_date = datetime.now().strftime("%Y/%m/%d")
     all_rows = []
     for i, r in enumerate(rows):
         摘要 = f"{r.get('notes', '')}  {drive_link}".strip() if drive_link else r.get("notes", "")
@@ -250,6 +253,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
             摘要,
             _parse_amount(r.get("amount", "")),
             name,
+            entry_date,
         ])
 
     _insert_rows(service, sheet_id, sheet_gid, insert_row, n)
@@ -257,7 +261,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     end_row = insert_row + n - 1
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{insert_row}:F{end_row}",
+        range=f"{SHEET_NAME}!A{insert_row}:G{end_row}",
         valueInputOption="RAW",
         body={"values": all_rows},
     ).execute()
