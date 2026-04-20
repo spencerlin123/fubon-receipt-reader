@@ -14,6 +14,11 @@
     "total_label": "合計新台幣 / 總價",
     "date_format": "中華民國 YYY年M月D日 (top-right, handwritten; add 1911 to year for Gregorian)"
   },
+  "Uber": {
+    "hints": "Uber ride receipt (English format). The FINAL total is the bold 'Total' displayed prominently near the top (e.g. NT$107.00). Do NOT use 'Trip fare' — that is the pre-discount amount before credits are applied. Discounts such as 'Uber One Credits' appear as negative line items (e.g. -NT$5.00) and reduce the total below the trip fare. Always use the bold top-level 'Total' as the amount. The date is in the header (e.g. Apr 16, 2026).",
+    "total_label": "Total (bold, top of receipt)",
+    "date_format": "MMM DD, YYYY (e.g. Apr 16, 2026)"
+  },
   "計程車": {
     "hints": "Taiwan taxi ride certificate (計程車乘車證明). The total is labeled '車資(Total, $)' in large bold text (e.g. 車資(Total,$):475). The '跳表金額(Fare, $)' below should match — use it to confirm. Use the '上車(Start)' date as the receipt date. Ignore 序號, 車號(Plate), phone numbers, meter brand/serial number, and 停等時間.",
     "total_label": "車資(Total, $)",
