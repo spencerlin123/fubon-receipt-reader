@@ -3,7 +3,7 @@ update_sheet.py
 ---------------
 Appends reimbursement rows to the Fubon 單據明細表 Google Sheet.
 
-Columns (A–G):
+Columns (A–H):
   A: 日期          — receipt date
   B: 憑證編號      — global auto-incrementing voucher number
   C: 費用類別      — always 交通費
@@ -11,6 +11,7 @@ Columns (A–G):
   E: 憑證總額      — receipt total amount
   F: 名字          — person name
   G: 輸入日期      — date the entry was submitted
+  H: 重複警告      — "⚠ DUPLICATE" in red if a duplicate was detected
 
 Rows are grouped by person in a fixed order. New rows are inserted
 at the end of the person's existing block, not just the sheet bottom.
@@ -41,6 +42,7 @@ WHITE     = {"red": 1.0,   "green": 1.0,   "blue": 1.0  }
 TEAL      = {"red": 0.0,   "green": 0.784, "blue": 0.847}
 AMBER     = {"red": 0.988, "green": 0.729, "blue": 0.012}   # warm gold for 合計 row
 DARK_TEXT = {"red": 0.102, "green": 0.102, "blue": 0.180}
+RED_BG    = {"red": 0.957, "green": 0.267, "blue": 0.267}   # red for duplicate warning
 
 
 def _get_service():
@@ -75,7 +77,9 @@ def _read_sheet_data(service, sheet_id: str) -> list[dict]:
         if col_a == "合計":
             continue
         name = row[5].strip() if len(row) > 5 else ""
-        data.append({"row": DATA_START_ROW + i, "name": name})
+        date = row[0].strip() if row else ""
+        amount = str(row[4]).strip() if len(row) > 4 else ""
+        data.append({"row": DATA_START_ROW + i, "name": name, "date": date, "amount": amount})
     return data
 
 
@@ -97,6 +101,27 @@ def _find_insert_row(sheet_data: list[dict], person_name: str) -> int:
         if person_rows.get(p):
             insert_after = max(person_rows[p])
     return insert_after + 1
+
+
+def _find_duplicate(sheet_data: list[dict], name: str, date: str, amount: str) -> bool:
+    """Return True if a row with the same name, date, and amount already exists."""
+    if not date or not amount:
+        return False
+    try:
+        amount_float = float(str(amount).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return False
+    for entry in sheet_data:
+        if entry["name"] != name:
+            continue
+        if entry["date"] != date:
+            continue
+        try:
+            if float(str(entry["amount"]).replace(",", "").strip()) == amount_float:
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
 
 
 def _global_voucher(sheet_data: list[dict]) -> int:
@@ -154,9 +179,9 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
 
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{totals_row}:G{totals_row}",
+        range=f"{SHEET_NAME}!A{totals_row}:H{totals_row}",
         valueInputOption="USER_ENTERED",
-        body={"values": [["合計", "", "", "", f"=SUM(E{DATA_START_ROW}:E{last_data_row})", "", ""]]},
+        body={"values": [["合計", "", "", "", f"=SUM(E{DATA_START_ROW}:E{last_data_row})", "", "", ""]]},
     ).execute()
 
     row_idx = totals_row - 1  # 0-indexed for batchUpdate
@@ -177,7 +202,7 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
                 "range": {
                     "sheetId": sheet_gid,
                     "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
-                    "startColumnIndex": 0, "endColumnIndex": 7,
+                    "startColumnIndex": 0, "endColumnIndex": 8,
                 },
                 "cell": {"userEnteredFormat": {
                     "backgroundColor": AMBER,
@@ -192,8 +217,38 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
     ).execute()
 
 
-def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: str = "") -> None:
-    """Insert a single receipt row into the correct person-grouped position."""
+def _format_duplicate_cells(service, sheet_id: str, sheet_gid: int, row_numbers: list[int]) -> None:
+    """Apply red background + bold white text to column H for the given 1-indexed row numbers."""
+    if not row_numbers:
+        return
+    requests = []
+    for row_1idx in row_numbers:
+        row_idx = row_1idx - 1  # 0-indexed
+        requests.append({"repeatCell": {
+            "range": {
+                "sheetId": sheet_gid,
+                "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
+                "startColumnIndex": 7, "endColumnIndex": 8,  # column H
+            },
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": RED_BG,
+                "textFormat": {"foregroundColor": WHITE, "bold": True},
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+        }})
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": requests},
+    ).execute()
+
+
+def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: str = "") -> bool:
+    """
+    Insert a single receipt row into the correct person-grouped position.
+    Returns True if a duplicate was detected (row is still inserted).
+    """
     sheet_id = os.getenv("FUBON_SHEET_ID")
     if not sheet_id:
         print("ERROR: FUBON_SHEET_ID not set in .env", file=sys.stderr)
@@ -202,18 +257,22 @@ def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: 
     service = _get_service()
     sheet_gid = _get_sheet_gid(service, sheet_id)
     sheet_data = _read_sheet_data(service, sheet_id)
+    duplicate = _find_duplicate(sheet_data, name, date, amount)
+    if duplicate:
+        print(f"  ⚠ Duplicate detected: {name} | {date} | {amount} NTD already exists in sheet")
     insert_row = _find_insert_row(sheet_data, name)
     voucher = _global_voucher(sheet_data)
 
     entry_date = datetime.now().strftime("%Y/%m/%d")
+    dup_flag = "⚠ DUPLICATE" if duplicate else ""
     摘要 = f"{notes}  {drive_link}".strip() if drive_link else notes
-    row = [date, voucher, "交通費", 摘要, _parse_amount(amount), name, entry_date]
+    row = [date, voucher, "交通費", 摘要, _parse_amount(amount), name, entry_date, dup_flag]
 
     _insert_rows(service, sheet_id, sheet_gid, insert_row, 1)
 
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{insert_row}:G{insert_row}",
+        range=f"{SHEET_NAME}!A{insert_row}:H{insert_row}",
         valueInputOption="RAW",
         body={"values": [row]},
     ).execute()
@@ -222,13 +281,18 @@ def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: 
     _renumber_vouchers(service, sheet_id, total_rows)
     _write_totals_row(service, sheet_id, sheet_gid, total_rows)
 
+    if duplicate:
+        _format_duplicate_cells(service, sheet_id, sheet_gid, [insert_row])
+
     print(f"Sheet updated: row {insert_row} | voucher #{voucher} | {name} | {date} | {amount} NTD")
+    return duplicate
 
 
-def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -> None:
+def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -> list[int]:
     """
     Insert multiple receipt rows for the same person in a single operation.
     rows: list of {"date": str, "amount": str, "notes": str}
+    Returns list of 0-indexed positions within rows that are duplicates.
     """
     sheet_id = os.getenv("FUBON_SHEET_ID")
     if not sheet_id:
@@ -238,6 +302,13 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     service = _get_service()
     sheet_gid = _get_sheet_gid(service, sheet_id)
     sheet_data = _read_sheet_data(service, sheet_id)
+    duplicate_indices = [
+        i for i, r in enumerate(rows)
+        if _find_duplicate(sheet_data, name, r.get("date", ""), r.get("amount", ""))
+    ]
+    for i in duplicate_indices:
+        r = rows[i]
+        print(f"  ⚠ Duplicate detected: {name} | {r.get('date')} | {r.get('amount')} NTD already exists in sheet")
     insert_row = _find_insert_row(sheet_data, name)
     start_voucher = _global_voucher(sheet_data)
     n = len(rows)
@@ -246,6 +317,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     all_rows = []
     for i, r in enumerate(rows):
         摘要 = f"{r.get('notes', '')}  {drive_link}".strip() if drive_link else r.get("notes", "")
+        dup_flag = "⚠ DUPLICATE" if i in duplicate_indices else ""
         all_rows.append([
             r.get("date", ""),
             start_voucher + i,
@@ -254,6 +326,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
             _parse_amount(r.get("amount", "")),
             name,
             entry_date,
+            dup_flag,
         ])
 
     _insert_rows(service, sheet_id, sheet_gid, insert_row, n)
@@ -261,7 +334,7 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     end_row = insert_row + n - 1
     service.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"{SHEET_NAME}!A{insert_row}:G{end_row}",
+        range=f"{SHEET_NAME}!A{insert_row}:H{end_row}",
         valueInputOption="RAW",
         body={"values": all_rows},
     ).execute()
@@ -270,4 +343,9 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     _renumber_vouchers(service, sheet_id, total_rows)
     _write_totals_row(service, sheet_id, sheet_gid, total_rows)
 
+    if duplicate_indices:
+        dup_rows = [insert_row + i for i in duplicate_indices]
+        _format_duplicate_cells(service, sheet_id, sheet_gid, dup_rows)
+
     print(f"Sheet updated: rows {insert_row}–{end_row} | vouchers #{start_voucher}–#{start_voucher + n - 1} | {name}")
+    return duplicate_indices

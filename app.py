@@ -126,7 +126,7 @@ def submit():
             # Step 3: Sheet update
             print("Step 3: Updating sheet...")
             t2 = time.time()
-            append_fubon_rows_batch(rows_data, drive_link, name)
+            duplicate_indices = append_fubon_rows_batch(rows_data, drive_link, name)
             cost_email = 0
             print(f"  Step 3 done: {time.time() - t2:.1f}s")
 
@@ -135,6 +135,9 @@ def submit():
             print(f"{'─'*50}")
             print(f"✓ Submission complete.  Total API cost: ${total_cost:.4f}  |  Time: {time.time() - t_start:.1f}s")
             flash(f"{len(receipts)} receipts submitted for {name} — {total_ntd:.0f} NTD total", "success")
+            if duplicate_indices:
+                dup_labels = ", ".join(f"Receipt {i+1}" for i in duplicate_indices)
+                flash(f"⚠ Possible duplicate: {dup_labels} may already be in the sheet. Please verify.", "error")
             if flagged:
                 flash(f"⚠ Receipt format may have changed for: {', '.join(flagged)}. Please verify the amounts.", "error")
 
@@ -162,7 +165,7 @@ def submit():
             # Step 3: Sheet update
             print("Step 3: Updating sheet...")
             t2 = time.time()
-            append_fubon_row(date or "Unknown", amount or "Unknown", sheet_notes, drive_link, name)
+            duplicate = append_fubon_row(date or "Unknown", amount or "Unknown", sheet_notes, drive_link, name)
             cost_email = 0
             print(f"  Step 3 done: {time.time() - t2:.1f}s")
 
@@ -170,6 +173,8 @@ def submit():
             print(f"{'─'*50}")
             print(f"✓ Submission complete.  Total API cost: ${total_cost:.4f}  |  Time: {time.time() - t_start:.1f}s")
             flash(f"Request submitted successfully! {name} — {(amount or 'Unknown')} NTD on {date or 'Unknown'}", "success")
+            if duplicate:
+                flash(f"⚠ Possible duplicate: a receipt for {amount} NTD on {date} already exists for {name}. Please verify.", "error")
             if missing:
                 flash(f"Warning: {' and '.join(missing)} could not be read from this receipt — please verify manually and update the sheet.", "error")
 
@@ -234,7 +239,7 @@ def api_submit():
 
         print("Step 3: Updating sheet...")
         t2 = time.time()
-        append_fubon_row(date or "Unknown", amount or "Unknown", sheet_notes, drive_link, name)
+        duplicate = append_fubon_row(date or "Unknown", amount or "Unknown", sheet_notes, drive_link, name)
         cost_email = 0
         print(f"  Step 3 done: {time.time() - t2:.1f}s")
 
@@ -243,6 +248,8 @@ def api_submit():
         print(f"✓ Submission complete.  Total API cost: ${total_cost:.4f}  |  Time: {time.time() - t_start:.1f}s")
 
         message = f"Submitted! {name} — {amount or 'Unknown'} NTD on {date or 'Unknown'}"
+        if duplicate:
+            message += f" ⚠ Possible duplicate — a receipt for {amount} NTD on {date} already exists for {name}. Please verify."
         if missing:
             message += f" ⚠ Could not read: {' and '.join(missing)} — please verify."
         return jsonify({"status": "success", "message": message})
