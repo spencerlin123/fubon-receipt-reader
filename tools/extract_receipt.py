@@ -58,6 +58,10 @@ def _extract_fields_with_gpt(client: OpenAI, raw_text: str) -> tuple[dict, float
   "Total Amount": "the total amount as a number only (no currency symbols), or empty string if not found"
 }}
 
+RULES:
+- For Uber receipts: use the bold "Total" at the top (the final charged amount after discounts). Do NOT use "Trip fare" — that is the pre-discount amount. Discounts like "Uber One Credits" reduce the total below the trip fare.
+- For the date: use the ride/transaction date, not the payment timestamp if they differ.
+
 Receipt text:
 {raw_text[:3000]}
 """
@@ -147,6 +151,8 @@ def extract_from_image(file_path: str) -> tuple[dict, float]:
         "- '格式' is a format code (small number like 25) — NEVER use it as the total.\n"
         "- NEVER use numbers after: '格式', '隨機碼', '機碼', '統一編號', '貴方', '買方'.\n"
         "- If neither '總計' nor '合計' is present, look for English 'Total'.\n"
+        "- For Uber receipts: the bold 'Total' at the top of the receipt (e.g. NT$107.00) is the FINAL amount after all discounts. "
+        "Do NOT use 'Trip fare' — that is the pre-discount fare. Discounts like 'Uber One Credits' reduce the total below the trip fare.\n"
         "- For the date: use the transaction timestamp (e.g. 2026-03-12 16:00:50), not the bimonthly period (e.g. 115年03-04月).\n"
         "- If the total cannot be clearly identified, return empty string."
     )
