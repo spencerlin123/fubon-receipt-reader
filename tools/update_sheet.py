@@ -149,7 +149,7 @@ def _insert_rows(service, sheet_id: str, sheet_gid: int, start_row_1indexed: int
                     "startIndex": start_idx,
                     "endIndex": start_idx + count,
                 },
-                "inheritFromBefore": start_idx > 0,
+                "inheritFromBefore": False,
             }
         }]},
     ).execute()
@@ -217,25 +217,39 @@ def _write_totals_row(service, sheet_id: str, sheet_gid: int, total_rows: int) -
     ).execute()
 
 
-def _format_duplicate_cells(service, sheet_id: str, sheet_gid: int, row_numbers: list[int]) -> None:
-    """Apply red background + bold white text to column H for the given 1-indexed row numbers."""
-    if not row_numbers:
+def _format_h_cells(service, sheet_id: str, sheet_gid: int, all_rows: list[int], duplicate_rows: list[int]) -> None:
+    """
+    Explicitly set column H formatting for every inserted row.
+    Duplicate rows get red background; all others get a white/clear background.
+    This prevents inherited red formatting from bleeding into the next inserted row.
+    """
+    if not all_rows:
         return
+    duplicate_set = set(duplicate_rows)
     requests = []
-    for row_1idx in row_numbers:
-        row_idx = row_1idx - 1  # 0-indexed
-        requests.append({"repeatCell": {
-            "range": {
-                "sheetId": sheet_gid,
-                "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
-                "startColumnIndex": 7, "endColumnIndex": 8,  # column H
-            },
-            "cell": {"userEnteredFormat": {
+    for row_1idx in all_rows:
+        row_idx = row_1idx - 1
+        if row_1idx in duplicate_set:
+            fmt = {
                 "backgroundColor": RED_BG,
                 "textFormat": {"foregroundColor": WHITE, "bold": True},
                 "horizontalAlignment": "CENTER",
                 "verticalAlignment": "MIDDLE",
-            }},
+            }
+        else:
+            fmt = {
+                "backgroundColor": WHITE,
+                "textFormat": {"foregroundColor": {"red": 0, "green": 0, "blue": 0}, "bold": False},
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+            }
+        requests.append({"repeatCell": {
+            "range": {
+                "sheetId": sheet_gid,
+                "startRowIndex": row_idx, "endRowIndex": row_idx + 1,
+                "startColumnIndex": 7, "endColumnIndex": 8,
+            },
+            "cell": {"userEnteredFormat": fmt},
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
         }})
     service.spreadsheets().batchUpdate(
@@ -281,8 +295,7 @@ def append_fubon_row(date: str, amount: str, notes: str, drive_link: str, name: 
     _renumber_vouchers(service, sheet_id, total_rows)
     _write_totals_row(service, sheet_id, sheet_gid, total_rows)
 
-    if duplicate:
-        _format_duplicate_cells(service, sheet_id, sheet_gid, [insert_row])
+    _format_h_cells(service, sheet_id, sheet_gid, [insert_row], [insert_row] if duplicate else [])
 
     print(f"Sheet updated: row {insert_row} | voucher #{voucher} | {name} | {date} | {amount} NTD")
     return duplicate
@@ -343,9 +356,9 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
     _renumber_vouchers(service, sheet_id, total_rows)
     _write_totals_row(service, sheet_id, sheet_gid, total_rows)
 
-    if duplicate_indices:
-        dup_rows = [insert_row + i for i in duplicate_indices]
-        _format_duplicate_cells(service, sheet_id, sheet_gid, dup_rows)
+    all_inserted = list(range(insert_row, insert_row + n))
+    dup_rows = [insert_row + i for i in duplicate_indices]
+    _format_h_cells(service, sheet_id, sheet_gid, all_inserted, dup_rows)
 
     print(f"Sheet updated: rows {insert_row}–{end_row} | vouchers #{start_voucher}–#{start_voucher + n - 1} | {name}")
     return duplicate_indices
