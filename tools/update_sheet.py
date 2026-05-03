@@ -31,6 +31,7 @@ from tools.google_auth import get_google_creds
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 SHEET_NAME = "單據明細表"
+SUMMARY_SHEET_NAME = "Player Summary"
 DATA_START_ROW = 5  # 1-indexed; rows 1-4 are headers
 
 # Fixed person order — matches the form dropdown
@@ -362,3 +363,131 @@ def append_fubon_rows_batch(rows: list[dict], drive_link: str, name: str = "") -
 
     print(f"Sheet updated: rows {insert_row}–{end_row} | vouchers #{start_voucher}–#{start_voucher + n - 1} | {name}")
     return duplicate_indices
+
+
+def _get_or_create_summary_sheet(service, sheet_id: str) -> int:
+    """Return sheetId of Player Summary tab, creating it if it doesn't exist."""
+    meta = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+    for s in meta["sheets"]:
+        if s["properties"]["title"] == SUMMARY_SHEET_NAME:
+            return s["properties"]["sheetId"]
+    response = service.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": [{"addSheet": {"properties": {"title": SUMMARY_SHEET_NAME}}}]},
+    ).execute()
+    return response["replies"][0]["addSheet"]["properties"]["sheetId"]
+
+
+def _update_player_summary(service, sheet_id: str) -> None:
+    """Rebuild the Player Summary tab from current 單據明細表 data."""
+    summary_gid = _get_or_create_summary_sheet(service, sheet_id)
+    sheet_data = _read_sheet_data(service, sheet_id)
+
+    # Aggregate per player
+    player_stats: dict[str, dict] = {}
+    for entry in sheet_data:
+        name = entry["name"]
+        if not name:
+            continue
+        try:
+            amount = float(str(entry["amount"]).replace(",", "").strip())
+        except (ValueError, TypeError):
+            amount = 0.0
+        if name not in player_stats:
+            player_stats[name] = {"dates": [], "count": 0, "total": 0.0}
+        player_stats[name]["count"] += 1
+        player_stats[name]["total"] += amount
+        date_str = entry["date"]
+        if date_str:
+            try:
+                player_stats[name]["dates"].append(datetime.strptime(date_str, "%m/%d/%Y"))
+            except ValueError:
+                pass
+
+    # Order: PERSON_ORDER first, then any new names
+    ordered = [p for p in PERSON_ORDER if p in player_stats]
+    others  = [p for p in player_stats if p not in PERSON_ORDER]
+    all_names = ordered + others
+
+    # Build data rows
+    data_rows = []
+    for name in all_names:
+        stats = player_stats[name]
+        dates = stats["dates"]
+        first = min(dates).strftime("%m/%d/%Y") if dates else ""
+        latest = max(dates).strftime("%m/%d/%Y") if dates else ""
+        data_rows.append([name, first, latest, stats["count"], stats["total"]])
+
+    # Clear existing content
+    service.spreadsheets().values().clear(
+        spreadsheetId=sheet_id,
+        range=f"{SUMMARY_SHEET_NAME}!A1:Z1000",
+    ).execute()
+
+    # Write header + data
+    header = [["Player", "First Receipt", "Latest Receipt", "# Receipts", "Total (NTD)"]]
+    all_values = header + data_rows
+    service.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=f"{SUMMARY_SHEET_NAME}!A1",
+        valueInputOption="RAW",
+        body={"values": all_values},
+    ).execute()
+
+    # Format header row
+    n_data = len(data_rows)
+    requests = [
+        # Header: navy background, white bold text
+        {"repeatCell": {
+            "range": {
+                "sheetId": summary_gid,
+                "startRowIndex": 0, "endRowIndex": 1,
+                "startColumnIndex": 0, "endColumnIndex": 5,
+            },
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": NAVY,
+                "textFormat": {"foregroundColor": WHITE, "bold": True, "fontSize": 10},
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+        }},
+        # Data rows: white background, clean text
+        {"repeatCell": {
+            "range": {
+                "sheetId": summary_gid,
+                "startRowIndex": 1, "endRowIndex": 1 + max(n_data, 1),
+                "startColumnIndex": 0, "endColumnIndex": 5,
+            },
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": WHITE,
+                "textFormat": {"foregroundColor": DARK_TEXT, "bold": False, "fontSize": 10},
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+        }},
+        # Center-align numeric columns (D and E)
+        {"repeatCell": {
+            "range": {
+                "sheetId": summary_gid,
+                "startRowIndex": 1, "endRowIndex": 1 + max(n_data, 1),
+                "startColumnIndex": 3, "endColumnIndex": 5,
+            },
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat(horizontalAlignment)",
+        }},
+        # Auto-resize all columns
+        {"autoResizeDimensions": {
+            "dimensions": {
+                "sheetId": summary_gid,
+                "dimension": "COLUMNS",
+                "startIndex": 0, "endIndex": 5,
+            }
+        }},
+    ]
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": requests},
+    ).execute()
+    print(f"  Player Summary updated: {len(all_names)} players")
